@@ -16,6 +16,7 @@ Creates and publishes an image for [ezBEQ](https://github.com/3ll3d00d/ezbeq) to
 - [Running with Docker Compose](#running-with-docker-compose)
 - [Running a local branch](#running-a-local-branch)
 - [Running in Kubernetes](#running-in-kubernetes)
+- [CI / Published Images](#ci--published-images)
 - [Developer Documentation](#developer-documentation)
 
 ## Setup
@@ -50,19 +51,17 @@ The docker image get's built to target:
 
 ## Running with Docker Compose
 
-See [docker-compose.yaml](./docker-compose.yaml) for a working example. At minimum you need a volume mapped to `/config` containing your `ezbeq.yml`:
+`docker compose up -d` works with no configuration — it pulls the published image and mounts `~/.ezbeq` as the config directory by default.
 
-```yaml
-services:
-  ezbeq:
-    image: ghcr.io/3ll3d00d/ezbeq-docker:main
-    container_name: ezbeq
-    volumes:
-      - /path/to/your/config:/config
-    ports:
-      - "8080:8080"
-    restart: unless-stopped
+To use a different config directory, set `EZBEQ_CONFIG_HOME` in a `.env` file (copy `.env.example`):
+
+```bash
+cp .env.example .env
+# set EZBEQ_CONFIG_HOME=/path/to/your/config
+docker compose up -d
 ```
+
+[docker-compose.yaml](./docker-compose.yaml) also reads `EZBEQ_PORT` from `.env` if your `ezbeq.yml` uses a non-default port. To customise further (e.g. add `extra_hosts` for a MiniDSP hostname, change the user, mount USB devices), add a `docker-compose.override.yaml` alongside it — Docker Compose picks it up automatically.
 
 See the [ezbeq documentation](https://github.com/3ll3d00d/ezbeq) for `ezbeq.yml` configuration options.
 
@@ -70,14 +69,13 @@ See the [ezbeq documentation](https://github.com/3ll3d00d/ezbeq) for `ezbeq.yml`
 
 ## Running a local branch
 
-To test a local ezbeq source tree (e.g. an unreleased branch) without
-publishing an image:
+To build and run from a local ezbeq source tree (e.g. an unreleased branch):
 
 **1. Copy `.env.example` to `.env` and fill in `EZBEQ_SRC`:**
 
 ```bash
 cp .env.example .env
-# edit .env — at minimum set EZBEQ_SRC to your local ezbeq checkout
+# edit .env — set EZBEQ_SRC to your local ezbeq checkout and EZBEQ_CONFIG_HOME to your config dir
 ```
 
 **2. Run it:**
@@ -89,13 +87,11 @@ bin/run-local --rebuild  # force a full image rebuild
 bin/run-local --stop     # stop and remove the container
 ```
 
-The script mounts your real `ezbeq.yml` config (defaults to `~/.ezbeq/ezbeq.yml`;
-override with `EZBEQ_CONFIG` in `.env`). Device connection details (TCP address
-etc.) come from the config file as usual — no extra network configuration needed.
-
-The image is built from the `dev` target in `Dockerfile`, which compiles
-the React UI and downloads the minidsp binary, so it behaves identically
-to the published image.
+`bin/run-local` loads `.env`, auto-detects the port from your `ezbeq.yml`, and runs:
+```
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up --build
+```
+[docker-compose.dev.yaml](./docker-compose.dev.yaml) extends the base config with the `dev` build target, which compiles the React UI from source and installs Python deps via Poetry.
 
 ---
 
@@ -255,6 +251,25 @@ spec:
         - ezbeq.yourdomain.dev
       secretName: ezbeq-tls
 ```
+
+## CI / Published Images
+
+Two GitHub Actions workflows publish images to `ghcr.io/<owner>/ezbeq-docker`:
+
+| Workflow | File | Trigger | Image tag | What it builds |
+|---|---|---|---|---|
+| Production | `publish.yaml` | Push to `main` | `:<branch>` (e.g. `:main`) | ezbeq installed from PyPI via `requirements.txt` — the official release |
+| Dev (from source) | `publish-dev.yaml` | Push to any branch | `:dev` | ezbeq built from source via Poetry, UI compiled from source |
+
+The dev workflow checks out the matching branch of `<owner>/ezbeq` (same name as the branch that triggered the build). If no matching branch exists it falls back to `main`, so ezbeq-docker-only branches still produce a working image.
+
+To use a dev image on a server instead of the official one, update the image tag in your `docker-compose.yaml`:
+
+```yaml
+image: ghcr.io/<owner>/ezbeq-docker:dev
+```
+
+---
 
 ## Developer Documentation
 
