@@ -1,4 +1,4 @@
-# ezbeq-docker
+# ezbeq-docker: bugs/ui-responsiveness-pr-ready test build
 
 Creates and publishes an image for [ezBEQ](https://github.com/3ll3d00d/ezbeq) to github packages, for use with [JRiver Media Center](https://www.jriver.com), or any ezBEQ client that uses the [MiniDSP-RS](https://github.com/mrene/minidsp-rs) project.
 
