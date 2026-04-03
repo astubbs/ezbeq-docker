@@ -15,6 +15,9 @@ services:
     environment:
       # Echo every HTTP request to stdout so it appears in `docker compose logs`.
       - EZBEQ_ACCESS_LOG_STDOUT=1
+      # Git build info injected by bin/run-local — surfaces in the UI footer.
+      - GIT_BRANCH
+      - GIT_SHA
     # Optional: map hostnames to IPs for your network setup
     # extra_hosts:
     #   - "minidsp:192.168.1.86"
