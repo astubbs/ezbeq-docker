@@ -1,6 +1,292 @@
-# ezbeq-jr
+# ezbeq-docker
 
-Creates and publishes an image for [ezbeq](https://github.com/3ll3d00d/ezbeq) to github packages
+Creates and publishes an image for [ezBEQ](https://github.com/3ll3d00d/ezbeq) to github packages, for use with [JRiver Media Center](https://www.jriver.com), or any ezBEQ client that uses the [MiniDSP-RS](https://github.com/mrene/minidsp-rs) project.
 
-* Exposes port 8080 
-* Expects a volume mapped to /config to allow user supplied ezbeq.yml 
+> [!NOTE]
+> ⚠ This image has not been tested with USB connected devices.
+> There are instructions on how to mount USB devices, from another legacy docker image project:
+> - [General docker discussion](https://github.com/jmery/ezbeq-docker/tree/ef3f954f37b1b420e31635a699bfbb864e861ad9?tab=readme-ov-file#general-linux-docker-instructions)
+> - [Synology NAS discussion](https://github.com/jmery/ezbeq-docker/tree/ef3f954f37b1b420e31635a699bfbb864e861ad9?tab=readme-ov-file#general-linux-docker-instructions)
+>  - [Higher privileges discussion](https://github.com/jmery/ezbeq-docker/tree/ef3f954f37b1b420e31635a699bfbb864e861ad9?tab=readme-ov-file#note-on-execute-container-using-high-privilege)
+
+## Contents
+
+- [Setup](#setup)
+- [FAQ](#faq)
+- [Running with Docker Compose](#running-with-docker-compose)
+- [Running a local branch](#running-a-local-branch)
+- [Running in Kubernetes](#running-in-kubernetes)
+- [CI / Published Images](#ci--published-images)
+- [Developer Documentation](#developer-documentation)
+
+## Setup
+
+- Expects a volume mapped to `/config `to allow user supplied `ezbeq.yml`
+
+Example docker compose file for your reference: [docker-compose.yaml](./docker-compose.yaml)
+
+## FAQ
+
+> Does this docker image work for [MiniDSP](https://www.minidsp.com) devices?
+
+Yes.
+
+> Does this build and publish an image for every ezBEQ release?
+
+Yes, see https://github.com/3ll3d00d/ezbeq/blob/main/.github/workflows/create-app.yaml#L108
+
+> Why is this not mentioned in the ezBEQ readme?
+
+It is, in the [Docker section](https://github.com/3ll3d00d/ezbeq?tab=readme-ov-file#docker).
+
+
+> What architectures are supported?
+
+The docker image get's built to target:
+
+- `linux/amd64`
+- `linux/arm64`
+
+---
+
+## Running with Docker Compose
+
+`docker compose up -d` works with no configuration — it pulls the published image and mounts `~/.ezbeq` as the config directory by default.
+
+To use a different config directory, set `EZBEQ_CONFIG_HOME` in a `.env` file (copy `.env.example`):
+
+```bash
+cp .env.example .env
+# set EZBEQ_CONFIG_HOME=/path/to/your/config
+docker compose up -d
+```
+
+[docker-compose.yaml](./docker-compose.yaml) also reads `EZBEQ_PORT` from `.env` if your `ezbeq.yml` uses a non-default port. To customise further (e.g. add `extra_hosts` for a MiniDSP hostname, change the user, mount USB devices), add a `docker-compose.override.yaml` alongside it — Docker Compose picks it up automatically.
+
+See the [ezbeq documentation](https://github.com/3ll3d00d/ezbeq) for `ezbeq.yml` configuration options.
+
+---
+
+## Running a local branch
+
+To build and run from a local ezbeq source tree (e.g. an unreleased branch):
+
+**1. Copy `.env.example` to `.env` and fill in `EZBEQ_SRC`:**
+
+```bash
+cp .env.example .env
+# edit .env — set EZBEQ_SRC to your local ezbeq checkout and EZBEQ_CONFIG_HOME to your config dir
+```
+
+**2. Run it:**
+
+```bash
+bin/run-local            # build image and start (detached)
+bin/run-local --logs     # start and follow logs
+bin/run-local --rebuild  # force a full image rebuild
+bin/run-local --stop     # stop and remove the container
+```
+
+`bin/run-local` loads `.env`, auto-detects the port from your `ezbeq.yml`, and runs:
+```
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up --build
+```
+[docker-compose.dev.yaml](./docker-compose.dev.yaml) extends the base config with the `dev` build target, which compiles the React UI from source and installs Python deps via Poetry.
+
+---
+
+## Running in Kubernetes
+
+It's assumed that anyone using k8s has an idea of what they're doing and has a particular (network) architecture in their design which will be specific to their own setup.
+
+An example of such a setup is provided by [@Frick](https://github.com/Frick) which may serve as useful jumping off point
+
+```
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ezbeq
+  labels:
+    kubernetes.io/metadata.name: ezbeq
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ezbeq-config
+  namespace: ezbeq
+data:
+# see https://github.com/3ll3d00d/ezbeq/tree/main/examples for more
+  ezbeq.yml: |
+    accessLogging: false
+    debugLogging: false
+    devices:
+      dsp1:
+        channels:
+          - sub1
+          - sub2
+        ip: 192.168.1.123:80
+        type: htp1
+        autoclear: true
+    port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: ezbeq
+  name: ezbeq
+  namespace: ezbeq
+spec:
+  progressDeadlineSeconds: 30
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ezbeq
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ezbeq
+    spec:
+      containers:
+        - name: ezbeq
+          image: ghcr.io/3ll3d00d/ezbeq-docker:main
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            # this path is baked into the ezbeq-docker container and is where
+            # the log is created and config file must be mounted
+            - mountPath: /config
+              name: ezbeq-scratch
+            - mountPath: /config/ezbeq.yml
+              name: ezbeq-config
+              subPath: ezbeq.yml
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /api/1/version
+              port: http
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /api/1/version
+              port: http
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 200m
+              memory: 256Mi
+          startupProbe:
+            failureThreshold: 30
+            httpGet:
+              path: /api/1/version
+              port: http
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+      volumes:
+        - name: ezbeq-scratch
+          emptyDir:
+            sizeLimit: 120Mi
+        - name: ezbeq-config
+          configMap:
+            name: ezbeq-config
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ezbeq
+  namespace: ezbeq
+spec:
+  selector:
+    app.kubernetes.io/name: ezbeq
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ezbeq
+  namespace: ezbeq
+  annotations:
+    cert-manager.io/cluster-issuer: lets-encrypt
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/websocket-services: "ezbeq"
+    external-dns.alpha.kubernetes.io/hostname: ezbeq.yourdomain.dev
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: ezbeq.yourdomain.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ezbeq
+                port:
+                  number: 8080
+  tls:
+    - hosts:
+        - ezbeq.yourdomain.dev
+      secretName: ezbeq-tls
+```
+
+## CI / Published Images
+
+Two GitHub Actions workflows publish images to `ghcr.io/<owner>/ezbeq-docker`:
+
+| Workflow | File | Trigger | Image tag | What it builds |
+|---|---|---|---|---|
+| Production | `publish.yaml` | Push to `main` | `:<branch>` (e.g. `:main`) | ezbeq installed from PyPI via `requirements.txt` — the official release |
+| Dev (from source) | `publish-dev.yaml` | Push to any branch | `:dev` | ezbeq built from source via Poetry, UI compiled from source |
+
+The dev workflow checks out the matching branch of `<owner>/ezbeq` (same name as the branch that triggered the build). If no matching branch exists it falls back to `main`, so ezbeq-docker-only branches still produce a working image.
+
+To use a dev image on a server instead of the official one, update the image tag in your `docker-compose.yaml`:
+
+```yaml
+image: ghcr.io/<owner>/ezbeq-docker:dev
+```
+
+---
+
+## Developer Documentation
+
+### Multi Platform Docker Image
+
+Build for two architectures in parallel, push:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t <HUB USERNAME>/ezbeq-docker:latest \
+  --push .
+```
+
+#### Setup
+
+Requires Docker's `buildx` setup:
+
+- `docker buildx create --use`
+- `docker buildx inspect --bootstrap`
